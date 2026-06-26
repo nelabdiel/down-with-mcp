@@ -1,0 +1,26 @@
+[project]
+name = "doc-extractor"
+version = "0.1.0"
+description = "MCP server for extracting text, tables, and images from PDF and DOCX files"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.3.3",
+    "pymupdf>=1.24.0",
+    "pdfplumber>=0.11.0",
+    "pytesseract>=0.3.13",
+    "python-docx>=1.1.0",
+    "pillow>=10.0.0",
+    "pandas>=2.0.0",
+]
+
+[project.scripts]
+serve = "fastmcp run extract_from_docs.py"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "ruff>=0.4.0",
+]
