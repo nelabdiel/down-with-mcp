@@ -105,7 +105,7 @@ claude mcp add your-server --scope user -- uv run \
   --project "$REPO/your-server" \
   fastmcp run "$REPO/your-server/server.py"
 
-echo "  ✅ your-server registered"
+echo "your-server registered"
 ```
 
 ### 5. Update this README
@@ -138,3 +138,7 @@ mcps/
 - **Paths:** `install.sh` always uses absolute paths derived from the repo location — safe to move or re-clone anywhere.
 - **Startup:** Claude Code launches each MCP server as a background subprocess on session start. You never run them manually.
 - **Debugging:** if a server shows `✘ Failed to connect`, run its `uv run ... fastmcp run ...` command directly in your terminal to see the actual error.
+
+
+
+Contributor(s): @nelabdiel
