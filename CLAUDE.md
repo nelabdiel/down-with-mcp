@@ -16,3 +16,16 @@ Tools available:
 - `extract_tables_only` — structured table data
 
 System requirement: Tesseract must be installed (`brew install tesseract` on macOS).
+
+### arxiv-explorer
+
+Search and fetch arXiv papers. Claude handles summarization and synthesis.
+
+Tools available:
+- `recent_papers` — papers by topic within a time window
+- `search_papers` — relevance-sorted search, supports field prefixes (ti:, au:, abs:, cat:)
+- `fetch_paper` — full metadata and abstract by arXiv ID or URL
+
+Prompts available:
+- `lit_review` — structured literature review for a topic
+- `related_work` — find and synthesize related work for a specific claim

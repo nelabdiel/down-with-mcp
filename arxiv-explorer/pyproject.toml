@@ -1,0 +1,19 @@
+[project]
+name = "arxiv-explorer"
+version = "0.1.0"
+description = "MCP server for searching and fetching arXiv papers"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.3.3",
+    "arxiv>=2.1.0",
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["arxiv_mcp"]
+
+[dependency-groups]
+dev = ["ruff>=0.4.0"]

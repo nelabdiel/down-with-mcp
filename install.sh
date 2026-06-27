@@ -17,6 +17,15 @@ claude mcp add doc-extractor --scope user -- uv run \
 
 echo "doc-extractor registered"
 
+# ── arxiv-explorer ────────────────────────────────────────────────────────────
+claude mcp remove arxiv-explorer 2>/dev/null && echo "  removed existing arxiv-explorer"
+
+claude mcp add arxiv-explorer --scope user -- uv run \
+  --project "$REPO/arxiv-explorer" \
+  fastmcp run "$REPO/arxiv-explorer/arxiv_finder.py"
+
+echo "arxiv-explorer registered"
+
 # ── add future servers here ────────────────────────────────────────────────
 # claude mcp remove another-mcp 2>/dev/null
 # claude mcp add another-mcp --scope user -- uv run \
