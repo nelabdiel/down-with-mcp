@@ -13,14 +13,12 @@ dependencies = [
     "pandas>=2.0.0",
 ]
 
-[project.scripts]
-serve = "fastmcp run extract_from_docs.py"
-
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
 
-[tool.uv]
-dev-dependencies = [
-    "ruff>=0.4.0",
-]
+[tool.setuptools]
+py-modules = ["extract_from_docs"]
+
+[dependency-groups]
+dev = ["ruff>=0.4.0"]
