@@ -29,3 +29,15 @@ Tools available:
 Prompts available:
 - `lit_review` — structured literature review for a topic
 - `related_work` — find and synthesize related work for a specific claim
+
+### rag-management
+
+Local vector search over indexed documents and text. Claude handles synthesis and citations — this server handles chunking, embedding, and retrieval. Requires Ollama running with `nomic-embed-text` pulled.
+
+Tools available:
+- `create_collection` — initialize a new vector DB at a given path
+- `add_document` — extract, chunk, embed, and index a PDF, DOCX, TXT, MD, TEX, or CSV
+- `add_text` — index raw text (web pages, API output, Mistral OCR results, notes)
+- `search` — semantic search returning ranked chunks with source filename
+- `collection_status` — chunk and source counts for a collection
+- `list_collections` — show all known collections

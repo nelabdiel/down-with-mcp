@@ -26,6 +26,15 @@ claude mcp add arxiv-explorer --scope user -- uv run \
 
 echo "arxiv-explorer registered"
 
+# ── rag ───────────────────────────────────────────────────────────────────────
+claude mcp remove rag-management 2>/dev/null && echo "  removed existing rag-management"
+
+claude mcp add rag-management --scope user -- uv run \
+  --project "$REPO/rag-management" \
+  fastmcp run "$REPO/rag-management/rag_manager.py"
+
+echo "rag registered"
+
 # ── add future servers here ────────────────────────────────────────────────
 # claude mcp remove another-mcp 2>/dev/null
 # claude mcp add another-mcp --scope user -- uv run \

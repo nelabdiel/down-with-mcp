@@ -8,7 +8,7 @@ A personal collection of MCP servers for [Claude Code](https://docs.anthropic.co
 |--------|-------------|---------|
 | [doc-extractor](./doc-extractor/) | Extract text, tables, OCR, and images | PDF, DOCX |
 | [arxiv-explorer](./arxiv-explorer/) | Search and fetch arXiv papers | arXiv API |
-
+| [rag-management](./rag-management/) | Local semantic search over documents and text | ChromaDB + Ollama |
 ## Setup
 
 ### Prerequisites
@@ -141,7 +141,12 @@ down-with-mcp/
 │   └── README.md
 │
 └── arxiv-explorer/
-    ├── arxiv_finder.py
+|   ├── arxiv_finder.py
+|   ├── pyproject.toml
+|   └── README.md
+|
+└── -managementrag/
+    ├── raanagermcp.py
     ├── pyproject.toml
     └── README.md
 ```
