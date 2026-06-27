@@ -4,9 +4,10 @@ A personal collection of MCP servers for [Claude Code](https://docs.anthropic.co
 
 ## Servers
 
-| Server | Description | File types |
-|--------|-------------|------------|
+| Server | Description | Sources |
+|--------|-------------|---------|
 | [doc-extractor](./doc-extractor/) | Extract text, tables, OCR, and images | PDF, DOCX |
+| [arxiv-explorer](./arxiv-explorer/) | Search and fetch arXiv papers | arXiv API |
 
 ## Setup
 
@@ -19,8 +20,8 @@ A personal collection of MCP servers for [Claude Code](https://docs.anthropic.co
 ### Install all servers
 
 ```bash
-git clone https://github.com/you/mcps.git
-cd mcps
+git clone https://github.com/nelabdiel/down-with-mcp.git
+cd down-with-mcp
 chmod +x install.sh
 ./install.sh
 ```
@@ -42,7 +43,7 @@ Or open Claude Code and run `/mcp` to see connected servers and their tools.
 ### 1. Create a folder
 
 ```
-mcps/
+down-with-mcp/
 └── your-server/
     ├── server.py          ← your FastMCP server
     ├── pyproject.toml     ← uv dependencies
@@ -87,9 +88,17 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["server"]   # filename without .py
+
+[dependency-groups]
+dev = ["ruff>=0.4.0"]
 ```
+
+> **Note:** use `setuptools` with `py-modules` rather than `hatchling` — hatchling expects a package directory structure and will fail on single-file servers. Also make sure `name` in `[project]` doesn't match any of your dependencies or uv will error with a self-dependency conflict.
 
 Run `uv sync` inside the folder to generate a lockfile. This makes Claude Code startup fast — uv reads the lockfile instead of resolving deps fresh every time.
 
@@ -121,24 +130,23 @@ Add a section describing the new server's tools so Claude Code knows what's avai
 ## Project structure
 
 ```
-mcps/
-├── README.md          ← you are here
-├── CLAUDE.md          ← auto-read by Claude Code; describes all available tools
-├── install.sh         ← registers all servers at user scope
+down-with-mcp/
+├── README.md              ← you are here
+├── CLAUDE.md              ← auto-read by Claude Code; describes all available tools
+├── install.sh             ← registers all servers at user scope
 │
-└── doc-extractor/
-    ├── extract_from_docs.py
+├── doc-extractor/
+│   ├── extract_from_docs.py
+│   ├── pyproject.toml
+│   └── README.md
+│
+└── arxiv-explorer/
+    ├── arxiv_finder.py
     ├── pyproject.toml
     └── README.md
 ```
 
-## Notes
 
-- **Scope:** servers are registered with `--scope user` so they work globally across all your Claude Code projects, not just this repo.
-- **Paths:** `install.sh` always uses absolute paths derived from the repo location — safe to move or re-clone anywhere.
-- **Startup:** Claude Code launches each MCP server as a background subprocess on session start. You never run them manually.
-- **Debugging:** if a server shows `✘ Failed to connect`, run its `uv run ... fastmcp run ...` command directly in your terminal to see the actual error.
-
-
+---
 
 Contributor(s): @nelabdiel
