@@ -1,5 +1,5 @@
 """
-RAG MCP server for Claude Code.
+RAG management MCP server for Claude Code.
 
 Provides local vector search over documents and text using ChromaDB
 and Ollama embeddings. Claude handles reasoning and synthesis —
@@ -9,7 +9,10 @@ Tools:
   - create_collection   : initialize a new vector DB at a given path
   - add_document        : chunk, embed, and index a PDF or DOCX file
   - add_text            : chunk, embed, and index raw text (web pages, notes, API output)
-  - search              : semantic search returning ranked chunks with source metadata
+  - search              : baseline semantic search (best for exact entities, dates, IDs)
+  - search_multi_query  : multi-phrasing search for synonym/coverage problems
+  - search_hyde         : hypothetical document search for abstract/conceptual queries
+  - search_mmr          : diversity-aware search using Maximal Marginal Relevance
   - collection_status   : document and chunk counts for a collection
   - list_collections    : show all known collections in a registry
 
@@ -17,9 +20,9 @@ Install into Claude Code (from repo root):
   ./install.sh
 
 Or manually:
-  claude mcp add rag --scope user -- uv run \\
-    --project /path/to/mcps/rag \\
-    fastmcp run /path/to/mcps/rag/rag_mcp.py
+  claude mcp add rag-management --scope user -- uv run \\
+    --project /path/to/mcps/rag-management \\
+    fastmcp run /path/to/mcps/rag-management/rag_manager.py
 """
 
 import io
@@ -40,7 +43,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
-mcp = FastMCP("rag")
+mcp = FastMCP("rag-management")
 
 # ── constants ────────────────────────────────────────────────────────────────
 
@@ -449,6 +452,262 @@ def list_collections() -> str:
         "count": len(cols),
         "collections": cols,
     }, indent=2)
+
+
+# ── retrieval helpers ─────────────────────────────────────────────────────────
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(x * x for x in b) ** 0.5
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _query_collection(
+    col,
+    embedding: list[float],
+    n_results: int,
+) -> list[dict]:
+    """Run a single embedding query and return normalized result dicts."""
+    results = col.query(
+        query_embeddings=[embedding],
+        n_results=min(n_results, col.count() or 1),
+        include=["documents", "metadatas", "distances", "embeddings"],
+    )
+    chunks = []
+    for doc, meta, dist, emb in zip(
+        results["documents"][0],
+        results["metadatas"][0],
+        results["distances"][0],
+        results["embeddings"][0],
+    ):
+        chunks.append({
+            "score": round(1 - dist, 4),
+            "source": meta.get("source", "unknown"),
+            "chunk_index": meta.get("chunk_index"),
+            "text": doc,
+            "embedding": emb,
+            "metadata": {k: v for k, v in meta.items() if k not in ("source", "chunk_index")},
+        })
+    return chunks
+
+
+def _deduplicate(all_chunks: list[dict]) -> list[dict]:
+    """Keep best score per unique (source, chunk_index) pair."""
+    seen: dict[tuple, dict] = {}
+    for chunk in all_chunks:
+        key = (chunk["source"], chunk["chunk_index"])
+        if key not in seen or chunk["score"] > seen[key]["score"]:
+            seen[key] = chunk
+    return sorted(seen.values(), key=lambda c: c["score"], reverse=True)
+
+
+def _format_results(chunks: list[dict], query: str, collection_name: str, method: str) -> str:
+    ranked = [
+        {
+            "rank": i + 1,
+            "score": c["score"],
+            "source": c["source"],
+            "chunk_index": c["chunk_index"],
+            "text": c["text"],
+            "metadata": c["metadata"],
+        }
+        for i, c in enumerate(chunks)
+    ]
+    return json.dumps({
+        "collection": collection_name,
+        "query": query,
+        "method": method,
+        "n_results": len(ranked),
+        "results": ranked,
+    }, ensure_ascii=False, indent=2)
+
+
+# ── advanced search tools ─────────────────────────────────────────────────────
+
+@mcp.tool()
+def search_multi_query(
+    collection_name: str,
+    query: str,
+    query_variants: list[str],
+    n_results: int = 5,
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+) -> str:
+    """
+    Multi-query search: retrieve for the original query plus phrasing variants,
+    then deduplicate and return the union ranked by best score.
+
+    Use this when the query might suffer from synonym or coverage problems —
+    e.g. "ML model accuracy" might miss docs that say "neural network F1-score".
+    Claude should generate the variants before calling this tool.
+
+    Best for: synonym-heavy queries, terminology variations, broader coverage.
+    Not ideal for: exact entity/ID lookups (use search instead).
+
+    Args:
+        collection_name: Name of the collection to search.
+        query: The original natural language query.
+        query_variants: 2-4 rephrased versions of the query. Preserve meaning,
+                        vary phrasing. Do NOT change entities, dates, or numbers.
+                        Example: ["machine learning classifier performance",
+                                  "neural network prediction quality",
+                                  "model evaluation metrics"]
+        n_results: Number of results to return per variant before deduplication.
+        embed_model: Must match the model used when indexing (default: nomic-embed-text).
+        ollama_url: Ollama API base URL (default: http://localhost:11434).
+    """
+    try:
+        col = _chroma_collection(collection_name)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    all_queries = [query] + query_variants[:4]  # cap at 4 variants per slide 22
+    all_chunks: list[dict] = []
+
+    try:
+        for q in all_queries:
+            emb = _embed([q], model=embed_model, ollama_url=ollama_url)[0]
+            chunks = _query_collection(col, emb, n_results)
+            all_chunks.extend(chunks)
+    except httpx.ConnectError:
+        return json.dumps({"error": f"Could not connect to Ollama at {ollama_url}. Is it running?"})
+
+    unique = _deduplicate(all_chunks)[:15]  # hard cap per slide 22
+    return _format_results(unique, query, collection_name, method="multi_query")
+
+
+@mcp.tool()
+def search_hyde(
+    collection_name: str,
+    query: str,
+    hypothesis: str,
+    n_results: int = 5,
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+) -> str:
+    """
+    HyDE (Hypothetical Document Embeddings) search: embed a hypothetical answer
+    instead of the raw query, then search for real documents similar to it.
+
+    Why this works: answers and documents use similar language/style, while
+    questions use different language. Embedding a fake answer bridges that gap.
+
+    Claude should write the hypothesis before calling this tool:
+      "Write a concise factual paragraph (4-6 sentences) that would answer
+       this question. Write in the style of academic or technical documentation.
+       Do not acknowledge uncertainty. Question: {query}"
+
+    Best for: abstract/conceptual queries, "What is X?" definitions,
+              questions where the query phrasing differs from how docs are written.
+    Not ideal for: exact entity lookups, specific dates/numbers (use search instead).
+
+    Args:
+        collection_name: Name of the collection to search.
+        query: The original question (used for result labeling only).
+        hypothesis: A hypothetical answer paragraph written by Claude.
+                    This is what gets embedded and searched — NOT the query.
+        n_results: Number of chunks to return.
+        embed_model: Must match the model used when indexing (default: nomic-embed-text).
+        ollama_url: Ollama API base URL (default: http://localhost:11434).
+    """
+    try:
+        col = _chroma_collection(collection_name)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    try:
+        # Embed the hypothesis, not the query
+        hyp_embedding = _embed([hypothesis], model=embed_model, ollama_url=ollama_url)[0]
+    except httpx.ConnectError:
+        return json.dumps({"error": f"Could not connect to Ollama at {ollama_url}. Is it running?"})
+
+    chunks = _query_collection(col, hyp_embedding, n_results)
+    return _format_results(chunks, query, collection_name, method="hyde")
+
+
+@mcp.tool()
+def search_mmr(
+    collection_name: str,
+    query: str,
+    n_results: int = 5,
+    n_candidates: int = 20,
+    lambda_mmr: float = 0.7,
+    embed_model: str = DEFAULT_EMBED_MODEL,
+    ollama_url: str = DEFAULT_OLLAMA_URL,
+) -> str:
+    """
+    MMR (Maximal Marginal Relevance) search: retrieves a diverse set of chunks
+    by balancing relevance to the query with dissimilarity to already-selected chunks.
+
+    Avoids returning 5 nearly identical passages from the same section of a document.
+    Formula: MMR = argmax [ λ·Sim(chunk, query) - (1-λ)·max Sim(chunk, selected) ]
+
+    Best for: broad exploratory queries, getting coverage across a document,
+              avoiding redundant passages when the corpus has repeated content.
+    Not ideal for: when you specifically want the top-N most similar chunks.
+
+    Args:
+        collection_name: Name of the collection to search.
+        query: Natural language query.
+        n_results: Number of diverse results to return (default 5).
+        n_candidates: Candidate pool size before MMR reranking (default 20).
+                      Larger = better diversity but slower.
+        lambda_mmr: Balance between relevance and diversity (default 0.7).
+                    1.0 = pure relevance (same as baseline search).
+                    0.0 = pure diversity.
+                    0.7 = favor relevance slightly, per standard practice.
+        embed_model: Must match the model used when indexing (default: nomic-embed-text).
+        ollama_url: Ollama API base URL (default: http://localhost:11434).
+    """
+    try:
+        col = _chroma_collection(collection_name)
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+
+    try:
+        query_embedding = _embed([query], model=embed_model, ollama_url=ollama_url)[0]
+    except httpx.ConnectError:
+        return json.dumps({"error": f"Could not connect to Ollama at {ollama_url}. Is it running?"})
+
+    # Fetch candidate pool
+    candidates = _query_collection(col, query_embedding, n_candidates)
+    if not candidates:
+        return json.dumps({"collection": collection_name, "query": query,
+                           "method": "mmr", "n_results": 0, "results": []})
+
+    # MMR selection
+    selected: list[dict] = []
+    selected_embeddings: list[list[float]] = []
+    remaining = list(candidates)
+
+    while len(selected) < n_results and remaining:
+        best_score = -float("inf")
+        best_chunk = None
+
+        for chunk in remaining:
+            relevance = _cosine_similarity(query_embedding, chunk["embedding"])
+            if selected_embeddings:
+                max_sim = max(
+                    _cosine_similarity(chunk["embedding"], sel_emb)
+                    for sel_emb in selected_embeddings
+                )
+            else:
+                max_sim = 0.0
+
+            mmr_score = lambda_mmr * relevance - (1 - lambda_mmr) * max_sim
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best_chunk = chunk
+
+        if best_chunk:
+            selected.append({**best_chunk, "score": round(best_score, 4)})
+            selected_embeddings.append(best_chunk["embedding"])
+            remaining.remove(best_chunk)
+
+    return _format_results(selected, query, collection_name, method="mmr")
 
 
 if __name__ == "__main__":

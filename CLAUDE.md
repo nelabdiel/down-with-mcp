@@ -41,3 +41,7 @@ Tools available:
 - `search` — semantic search returning ranked chunks with source filename
 - `collection_status` — chunk and source counts for a collection
 - `list_collections` — show all known collections
+- * `search_multi_query` — search the original query plus alternate phrasings, then deduplicate and rank the combined results
+* `search_hyde` — search using a hypothetical answer/document to improve retrieval for abstract or conceptual questions
+* `search_mmr` — diversity-aware search that balances relevance with non-redundant coverage across chunks
+
