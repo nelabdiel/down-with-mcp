@@ -33,7 +33,7 @@ claude mcp add rag-management --scope user -- uv run \
   --project "$REPO/rag-management" \
   fastmcp run "$REPO/rag-management/rag_manager.py"
 
-echo "rag registered"
+echo "rag-management registered"
 
 # ── add future servers here ────────────────────────────────────────────────
 # claude mcp remove another-mcp 2>/dev/null
