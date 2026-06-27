@@ -1,8 +1,8 @@
 # MCP Servers
 
-This repo contains MCP servers for Claude Code. When you open this project,
-check if the servers below are registered. If any are missing from `Claude mcp list`,
-run `./install.sh` to register them all, then verify with `/mcp`.
+This repo contains MCP servers for Codex Code. When you open this project,
+check if the servers below are registered. If any are missing from `Codex mcp list`,
+run `./install-for-codex.sh` to register them all, then verify with `/mcp`.
 
 ## Registered servers
 
@@ -19,7 +19,7 @@ System requirement: Tesseract must be installed (`brew install tesseract` on mac
 
 ### arxiv-explorer
 
-Search and fetch arXiv papers. Claude handles summarization and synthesis.
+Search and fetch arXiv papers. Codex handles summarization and synthesis.
 
 Tools available:
 - `recent_papers` — papers by topic within a time window
@@ -32,7 +32,7 @@ Prompts available:
 
 ### rag-management
 
-Local vector search over indexed documents and text. Claude handles synthesis and citations — this server handles chunking, embedding, and retrieval. Requires Ollama running with `nomic-embed-text` pulled.
+Local vector search over indexed documents and text. Codex handles synthesis and citations — this server handles chunking, embedding, and retrieval. Requires Ollama running with `nomic-embed-text` pulled.
 
 Tools available:
 - `create_collection` — initialize a new vector DB at a given path
@@ -44,3 +44,4 @@ Tools available:
 - `search_multi_query` — search the original query plus alternate phrasings, then deduplicate and rank the combined results
 - `search_hyde` — search using a hypothetical answer/document to improve retrieval for abstract or conceptual questions
 - `search_mmr` — diversity-aware search that balances relevance with non-redundant coverage across chunks
+

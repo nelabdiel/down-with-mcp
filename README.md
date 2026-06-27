@@ -1,6 +1,6 @@
 # mcps
 
-A personal collection of MCP servers for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview). Each server lives in its own folder with its own dependencies and README.
+A personal collection of MCP servers for [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) and [Codex (in progress)](https://developers.openai.com/codex). Each server lives in its own folder with its own dependencies and README.
 
 ## Servers
 
@@ -10,6 +10,9 @@ A personal collection of MCP servers for [Claude Code](https://docs.anthropic.co
 | [arxiv-explorer](./arxiv-explorer/) | Search and fetch arXiv papers | arXiv API |
 | [rag-management](./rag-management/) | Local semantic search over documents and text | ChromaDB + Ollama |
 ## Setup
+
+> **Claude Code vs. Codex:** This repo is written primarily around Claude Code. If you’re using Claude, follow the instructions as-is. If you’re using Codex, use the parallel Codex files instead: `install-for-codex.sh`, `AGENTS.md`, and `codex mcp list`. The server folders, dependencies, and FastMCP patterns are otherwise the same.
+
 
 ### Prerequisites
 
@@ -98,8 +101,6 @@ py-modules = ["server"]   # filename without .py
 dev = ["ruff>=0.4.0"]
 ```
 
-> **Note:** use `setuptools` with `py-modules` rather than `hatchling` — hatchling expects a package directory structure and will fail on single-file servers. Also make sure `name` in `[project]` doesn't match any of your dependencies or uv will error with a self-dependency conflict.
-
 Run `uv sync` inside the folder to generate a lockfile. This makes Claude Code startup fast — uv reads the lockfile instead of resolving deps fresh every time.
 
 ### 4. Register it in install.sh
@@ -131,9 +132,11 @@ Add a section describing the new server's tools so Claude Code knows what's avai
 
 ```
 down-with-mcp/
-├── README.md              ← you are here
-├── CLAUDE.md              ← auto-read by Claude Code; describes all available tools
-├── install.sh             ← registers all servers at user scope
+├── README.md                ← you are here
+├── CLAUDE.md                ← auto-read by Claude Code; describes all available tools
+├── install.sh               ← registers all servers at user scope
+├── AGENTS.md                ← auto-read by Codex 
+├── install-for-codex.sh     ← registers all servers at user scope with codex
 │
 ├── doc-extractor/
 │   ├── extract_from_docs.py
@@ -145,7 +148,7 @@ down-with-mcp/
 │   ├── pyproject.toml
 │   └── README.md
 │
-└── managementrag/
+└── rag-management/
     ├── rag_manager.py
     ├── pyproject.toml
     └── README.md
