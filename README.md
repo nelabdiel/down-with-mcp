@@ -140,13 +140,13 @@ down-with-mcp/
 │   ├── pyproject.toml
 │   └── README.md
 │
-└── arxiv-explorer/
-|   ├── arxiv_finder.py
-|   ├── pyproject.toml
-|   └── README.md
-|
-└── -managementrag/
-    ├── raanagermcp.py
+├── arxiv-explorer/
+│   ├── arxiv_finder.py
+│   ├── pyproject.toml
+│   └── README.md
+│
+└── managementrag/
+    ├── rag_manager.py
     ├── pyproject.toml
     └── README.md
 ```
