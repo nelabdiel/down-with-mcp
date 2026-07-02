@@ -1,5 +1,5 @@
 [project]
-name = "rag-mcp"
+name = "rag-management"
 version = "0.1.0"
 description = "Local RAG MCP server using ChromaDB and Ollama embeddings"
 requires-python = ">=3.10"

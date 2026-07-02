@@ -3,7 +3,7 @@ RAG management MCP server for Claude Code.
 
 Provides local vector search over documents and text using ChromaDB
 and Ollama embeddings. Claude handles reasoning and synthesis —
-this server handles chunking, embedding, and retrieval.
+this server handles chunking, embedding, retrieval, and citation formatting.
 
 Tools:
   - create_collection   : initialize a new vector DB at a given path
@@ -15,6 +15,11 @@ Tools:
   - search_mmr          : diversity-aware search using Maximal Marginal Relevance
   - collection_status   : document and chunk counts for a collection
   - list_collections    : show all known collections in a registry
+
+Citation support:
+  Every search result includes a ready-to-use `citation` string (e.g. "[report.pdf, p. 4]")
+  and a `text_preview` field. PDFs are extracted page-by-page so page numbers are always
+  available in results. Use the citation strings inline when synthesizing answers.
 
 Install into Claude Code (from repo root):
   ./install.sh
@@ -28,6 +33,7 @@ Or manually:
 import io
 import json
 import logging
+import re
 import sqlite3
 import sys
 import uuid
@@ -128,21 +134,52 @@ def _embed(texts: list[str], model: str, ollama_url: str) -> list[list[float]]:
 
 # ── extraction ────────────────────────────────────────────────────────────────
 
-def _extract_pdf(path: Path) -> str:
+def _extract_pdf(path: Path) -> tuple[str, dict[int, int]]:
+    """
+    Extract text from a PDF page-by-page.
+
+    Returns:
+        text: Full document text with page boundary markers in the form
+              \x00PAGE:N\x00 (null-delimited so they survive chunking and
+              can be parsed back out without polluting visible content).
+        page_char_offsets: Mapping of {page_number (1-based): char offset where
+              that page starts in the returned text}. Used during chunking to
+              assign page numbers to chunks.
+    """
     doc = fitz.open(str(path))
-    return "\n".join(page.get_text("text") for page in doc)
+    parts: list[str] = []
+    page_char_offsets: dict[int, int] = {}
+    cursor = 0
+
+    for page_num, page in enumerate(doc, start=1):
+        marker = f"\x00PAGE:{page_num}\x00"
+        page_char_offsets[page_num] = cursor + len(marker)
+        page_text = page.get_text("text")
+        segment = marker + page_text
+        parts.append(segment)
+        cursor += len(segment)
+
+    return "".join(parts), page_char_offsets
 
 
-def _extract_docx(path: Path) -> str:
+def _extract_docx(path: Path) -> tuple[str, dict]:
     document = docx.Document(str(path))
-    return "\n".join(p.text for p in document.paragraphs if p.text.strip())
+    text = "\n".join(p.text for p in document.paragraphs if p.text.strip())
+    return text, {}
 
 
-def _extract_text(path: Path) -> str:
-    return path.read_text(encoding="utf-8", errors="replace")
+def _extract_text(path: Path) -> tuple[str, dict]:
+    return path.read_text(encoding="utf-8", errors="replace"), {}
 
 
-def _extract(path: Path) -> str:
+def _extract(path: Path) -> tuple[str, dict[int, int]]:
+    """
+    Extract text from a supported file.
+
+    Returns:
+        (text, page_char_offsets) where page_char_offsets maps
+        page_number -> char offset in text (only populated for PDFs).
+    """
     ext = path.suffix.lower()
     if ext == ".pdf":
         return _extract_pdf(path)
@@ -156,32 +193,118 @@ def _extract(path: Path) -> str:
 
 # ── chunking ──────────────────────────────────────────────────────────────────
 
-def _chunk(text: str) -> list[str]:
+# Matches the page markers inserted by _extract_pdf
+_PAGE_MARKER_RE = re.compile(r"\x00PAGE:(\d+)\x00")
+
+
+def _page_at_offset(offset: int, page_char_offsets: dict[int, int]) -> int | None:
+    """
+    Return the 1-based page number that contains `offset` in the full text.
+    page_char_offsets maps page_number -> char offset where that page's *text*
+    starts (i.e. after the marker). Returns None for non-PDF sources.
+    """
+    if not page_char_offsets:
+        return None
+    best_page = None
+    for page_num, page_start in sorted(page_char_offsets.items()):
+        if page_start <= offset:
+            best_page = page_num
+        else:
+            break
+    return best_page
+
+
+def _strip_page_markers(text: str) -> str:
+    """Remove the internal \x00PAGE:N\x00 markers from visible text."""
+    return _PAGE_MARKER_RE.sub("", text)
+
+
+def _chunk(text: str, page_char_offsets: dict[int, int] | None = None) -> list[dict]:
+    """
+    Split text into overlapping chunks.
+
+    Returns a list of dicts:
+        {
+            "text": str,          # chunk text (page markers stripped)
+            "page_number": int | None,   # 1-based page where chunk starts
+            "char_offset": int,   # character offset of chunk start in original text
+        }
+    """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
     )
-    return splitter.split_text(text)
+    raw_chunks = splitter.split_text(text)
+    offsets = _compute_chunk_offsets(text, raw_chunks)
+    po = page_char_offsets or {}
+
+    result = []
+    for raw, offset in zip(raw_chunks, offsets):
+        result.append({
+            "text": _strip_page_markers(raw),
+            "page_number": _page_at_offset(offset, po),
+            "char_offset": offset,
+        })
+    return result
+
+
+def _compute_chunk_offsets(text: str, chunks: list[str]) -> list[int]:
+    """
+    Walk through the original text and find the start offset of each chunk.
+    Handles overlapping chunks correctly by advancing a cursor.
+    """
+    offsets = []
+    cursor = 0
+    for chunk in chunks:
+        idx = text.find(chunk, cursor)
+        if idx == -1:
+            # Fallback: use cursor if exact match not found (shouldn't happen)
+            offsets.append(cursor)
+        else:
+            offsets.append(idx)
+            cursor = idx  # allow overlap — next chunk may start before end of this one
+    return offsets
 
 
 # ── indexing ──────────────────────────────────────────────────────────────────
 
 def _index_chunks(
     collection_name: str,
-    chunks: list[str],
+    chunks: list[dict],
     source: str,
     metadata: dict,
     embed_model: str,
     ollama_url: str,
 ) -> int:
+    """
+    Embed and store chunks in ChromaDB.
+
+    Each chunk dict must have at minimum:
+        "text"        : str   — the chunk text
+        "page_number" : int | None
+        "char_offset" : int
+
+    Stored metadata per chunk includes source, chunk_index, page_number,
+    char_offset, and everything from the caller-supplied metadata dict.
+    """
     col = _chroma_collection(collection_name)
-    embeddings = _embed(chunks, model=embed_model, ollama_url=ollama_url)
+    texts = [c["text"] for c in chunks]
+    embeddings = _embed(texts, model=embed_model, ollama_url=ollama_url)
     doc_id = str(uuid.uuid4())[:8]
 
     ids = [f"{doc_id}_chunk_{i}" for i in range(len(chunks))]
-    metas = [{"source": source, "chunk_index": i, **metadata} for i, _ in enumerate(chunks)]
+    metas = []
+    for i, chunk in enumerate(chunks):
+        m = {
+            "source": source,
+            "chunk_index": i,
+            "page_number": chunk["page_number"] if chunk["page_number"] is not None else -1,
+            "char_offset": chunk["char_offset"],
+            **metadata,
+        }
+        metas.append(m)
 
-    col.add(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metas)
+    col.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metas)
     return len(chunks)
 
 
@@ -245,19 +368,23 @@ def add_document(
         return json.dumps({"error": f"File not found: {path}"})
 
     try:
-        text = _extract(path)
+        text, page_char_offsets = _extract(path)
     except ValueError as e:
         return json.dumps({"error": str(e)})
 
     if not text.strip():
         return json.dumps({"error": f"No text extracted from {path.name}. File may be scanned — try OCR first."})
 
-    chunks = _chunk(text)
+    # Determine total page count for PDFs (stored in metadata for citation use)
+    total_pages = max(page_char_offsets.keys()) if page_char_offsets else None
+
+    chunks = _chunk(text, page_char_offsets)
     metadata = {
         "filename": path.name,
         "filepath": str(path),
         "filetype": path.suffix.lower().lstrip("."),
         "indexed_utc": datetime.now(timezone.utc).isoformat(),
+        "total_pages": total_pages if total_pages is not None else -1,
     }
 
     try:
@@ -279,6 +406,7 @@ def add_document(
         "collection": collection_name,
         "source": path.name,
         "chunks_indexed": n,
+        "total_pages": total_pages,
         "embed_model": embed_model,
     }, indent=2)
 
@@ -312,6 +440,7 @@ def add_text(
 
     metadata = {
         "indexed_utc": datetime.now(timezone.utc).isoformat(),
+        "total_pages": -1,
     }
     if extra_metadata:
         try:
@@ -319,7 +448,8 @@ def add_text(
         except json.JSONDecodeError:
             return json.dumps({"error": "extra_metadata must be valid JSON."})
 
-    chunks = _chunk(text)
+    # Raw text has no page structure — chunk without page offsets
+    chunks = _chunk(text, page_char_offsets=None)
 
     try:
         n = _index_chunks(
@@ -354,8 +484,18 @@ def search(
 ) -> str:
     """
     Semantic search over a collection. Returns the most relevant chunks
-    with source metadata. Claude should use these chunks to answer questions,
-    synthesize information, or verify claims.
+    with source metadata, page numbers, and ready-to-use citation strings.
+
+    Each result includes:
+      - citation     : inline citation string, e.g. "[report.pdf, p. 4]" — use this
+                       directly in your response immediately after any claim it supports.
+      - page_number  : 1-based page number (populated for PDFs; null for other sources).
+      - text_preview : first 200 characters of the chunk for quick relevance scanning.
+      - text         : full chunk text.
+      - score        : cosine similarity (0–1). Scores below 0.5 are lower-confidence.
+
+    After synthesizing an answer, append a "Sources" section listing each unique
+    source cited with its page number(s).
 
     Args:
         collection_name: Name of the collection to search.
@@ -386,19 +526,34 @@ def search(
         results["metadatas"][0],
         results["distances"][0],
     )):
+        source = meta.get("source", "unknown")
+        chunk_index = meta.get("chunk_index", i)
+        page_raw = meta.get("page_number", -1)
+        page_number = page_raw if page_raw and page_raw != -1 else None
+        citation = _build_citation(source, meta, chunk_index)
+
         chunks.append({
             "rank": i + 1,
             "score": round(1 - dist, 4),  # cosine similarity
-            "source": meta.get("source", "unknown"),
-            "chunk_index": meta.get("chunk_index"),
+            "source": source,
+            "chunk_index": chunk_index,
+            "page_number": page_number,
+            "citation": f"[{citation}]",
             "text": doc,
-            "metadata": {k: v for k, v in meta.items() if k not in ("source", "chunk_index")},
+            "text_preview": doc[:PREVIEW_LENGTH] + ("…" if len(doc) > PREVIEW_LENGTH else ""),
+            "metadata": {k: v for k, v in meta.items() if k not in ("source", "chunk_index", "page_number")},
         })
 
     return json.dumps({
         "collection": collection_name,
         "query": query,
+        "method": "semantic",
         "n_results": len(chunks),
+        "citation_instructions": (
+            "Cite inline using the `citation` field in square brackets immediately after "
+            "each claim, e.g. '...shown in prior work [report.pdf, p. 3].' "
+            "End your response with a 'Sources' section listing unique sources cited."
+        ),
         "results": chunks,
     }, ensure_ascii=False, indent=2)
 
@@ -483,13 +638,15 @@ def _query_collection(
         results["distances"][0],
         results["embeddings"][0],
     ):
+        page_raw = meta.get("page_number", -1)
         chunks.append({
             "score": round(1 - dist, 4),
             "source": meta.get("source", "unknown"),
             "chunk_index": meta.get("chunk_index"),
+            "page_number": page_raw if page_raw and page_raw != -1 else None,
             "text": doc,
             "embedding": emb,
-            "metadata": {k: v for k, v in meta.items() if k not in ("source", "chunk_index")},
+            "metadata": {k: v for k, v in meta.items() if k not in ("source", "chunk_index", "page_number")},
         })
     return chunks
 
@@ -498,29 +655,93 @@ def _deduplicate(all_chunks: list[dict]) -> list[dict]:
     """Keep best score per unique (source, chunk_index) pair."""
     seen: dict[tuple, dict] = {}
     for chunk in all_chunks:
+        # Deduplicate by (source, chunk_index) — chunk_index is globally unique per
+        # indexed document, so this correctly identifies identical passages even when
+        # retrieved by different query variants.
         key = (chunk["source"], chunk["chunk_index"])
         if key not in seen or chunk["score"] > seen[key]["score"]:
             seen[key] = chunk
     return sorted(seen.values(), key=lambda c: c["score"], reverse=True)
 
 
+PREVIEW_LENGTH = 200  # characters for text_preview field
+
+
+def _build_citation(source: str, metadata: dict, chunk_index: int) -> str:
+    """
+    Build a compact, human-readable citation string for a chunk.
+
+    Format examples:
+        "report.pdf, p. 4"          — PDF with known page
+        "report.pdf, chunk 7"       — PDF where page could not be determined
+        "notes.md, chunk 3"         — non-PDF source
+        "web-scrape, chunk 0"       — raw text indexed via add_text
+
+    The citation is ready to drop inline, e.g.:
+        "...as described in the methodology [report.pdf, p. 4]."
+    """
+    page = metadata.get("page_number", -1)
+    if page and page != -1:
+        location = f"p. {page}"
+    else:
+        location = f"chunk {chunk_index}"
+    return f"{source}, {location}"
+
+
 def _format_results(chunks: list[dict], query: str, collection_name: str, method: str) -> str:
-    ranked = [
-        {
+    """
+    Serialize ranked search results to JSON.
+
+    Each result includes:
+      - rank, score, source, chunk_index
+      - page_number  : 1-based page (None if not a PDF or page unknown)
+      - citation     : ready-to-use inline citation string, e.g. "[report.pdf, p. 4]"
+      - text         : full chunk text
+      - text_preview : first 200 characters of chunk text (for quick scanning)
+      - metadata     : all other stored metadata fields
+
+    CITATION INSTRUCTIONS FOR CLAUDE
+    ─────────────────────────────────
+    When synthesizing an answer from these results:
+    1. Use the `citation` field inline, wrapped in square brackets, immediately
+       after any claim drawn from that chunk. Example:
+         "Volatility clustering was shown to persist across market regimes
+          [crypto_study.pdf, p. 12], consistent with earlier equity findings
+          [lit_review.pdf, p. 3]."
+    2. At the end of your response, add a "Sources" section listing each unique
+       source cited, with its score and page range if multiple pages were used.
+    3. If score < 0.5, note that the match is lower-confidence.
+    4. Never fabricate page numbers — only use the `page_number` from this payload.
+    """
+    ranked = []
+    for i, c in enumerate(chunks):
+        meta = c.get("metadata", {})
+        page_raw = meta.get("page_number", -1)
+        page_number = page_raw if page_raw and page_raw != -1 else None
+        citation = _build_citation(c["source"], meta, c["chunk_index"])
+
+        ranked.append({
             "rank": i + 1,
             "score": c["score"],
             "source": c["source"],
             "chunk_index": c["chunk_index"],
+            "page_number": page_number,
+            "citation": f"[{citation}]",
             "text": c["text"],
-            "metadata": c["metadata"],
-        }
-        for i, c in enumerate(chunks)
-    ]
+            "text_preview": c["text"][:PREVIEW_LENGTH] + ("…" if len(c["text"]) > PREVIEW_LENGTH else ""),
+            "metadata": {k: v for k, v in meta.items() if k not in ("page_number",)},
+        })
+
     return json.dumps({
         "collection": collection_name,
         "query": query,
         "method": method,
         "n_results": len(ranked),
+        "citation_instructions": (
+            "Cite inline using the `citation` field in square brackets immediately after "
+            "each claim, e.g. '...shown in prior work [report.pdf, p. 3].' "
+            "End your response with a 'Sources' section listing unique sources cited."
+        ),
         "results": ranked,
     }, ensure_ascii=False, indent=2)
 

@@ -7,14 +7,58 @@ Local semantic search over your documents. Index PDFs, DOCX files, or any raw te
 | Tool | Description |
 |------|-------------|
 | `create_collection` | Initialize a new vector DB at a given path |
-| `add_document` | Extract, chunk, embed, and index a PDF, DOCX, TXT, MD, TEX, or CSV file |
+| `add_document` | Extract, chunk, embed, and index a PDF, DOCX, TXT, MD, TEX, or CSV file. PDFs are extracted page-by-page so page numbers are available in all search results. |
 | `add_text` | Chunk, embed, and index raw text — web pages, API output, notes, Mistral OCR results |
-| `search` | Semantic search returning ranked chunks with source metadata |
+| `search` | Semantic search returning ranked chunks with page numbers, citation strings, and text previews |
 | `collection_status` | Document and chunk counts for a collection |
 | `list_collections` | Show all known collections |
-| `search_multi_query` | Multi-query search: searches the original query plus 2–4 rephrasings, then deduplicates results |
-| `search_hyde` | HyDE search: embeds a hypothetical answer/document instead of the raw query for abstract or conceptual questions |
-| `search_mmr` | MMR (Maximal Marginal Retrieval) search: diversity-aware retrieval that avoids returning near-duplicate chunks |
+| `search_multi_query` | Multi-query search: searches the original query plus 2–4 rephrasings, then deduplicates results. Returns citations on all results. |
+| `search_hyde` | HyDE search: embeds a hypothetical answer/document instead of the raw query for abstract or conceptual questions. Returns citations on all results. |
+| `search_mmr` | MMR (Maximal Marginal Retrieval) search: diversity-aware retrieval that avoids returning near-duplicate chunks. Returns citations on all results. |
+
+## Citation support
+
+Every search result — across all four search tools — includes three citation-ready fields:
+
+| Field | Description |
+|-------|-------------|
+| `citation` | Ready-to-use inline citation string, e.g. `[report.pdf, p. 4]` or `[notes.md, chunk 3]` |
+| `page_number` | 1-based page number for PDFs; `null` for other source types |
+| `text_preview` | First 200 characters of the chunk for quick relevance scanning |
+
+Each result payload also includes a `citation_instructions` field at the top level that tells Claude exactly how to use these when synthesizing answers — cite inline immediately after each claim, then list unique sources at the end of the response.
+
+**Citation format examples:**
+
+```
+# PDF with known page
+[ref1.pdf, p. 7]
+
+# Non-PDF source (md, txt, csv, raw text)
+[draft.md, chunk 3]
+
+# Raw text indexed via add_text
+[mistral-ocr:scan.pdf, chunk 0]
+```
+
+**Example synthesized response with inline citations:**
+
+```
+Amplitude amplification generalizes Grover search by rotating amplitude
+toward marked states using alternating reflections [ref1.pdf, p. 7].
+The quadratic speedup extends to any quantum procedure with a recognizable
+good outcome [ref1.pdf, p. 9], a point also noted in the draft survey
+[draft.md, chunk 3].
+
+Sources
+-------
+- ref1.pdf — pp. 7, 9 (score: 0.91)
+- draft.md — chunk 3 (score: 0.78)
+```
+
+> **Upgrading from an earlier version?** Existing indexed collections do not have
+> page numbers in their chunk metadata. Re-index any PDFs you want citation data
+> for — `add_document` will pick up page numbers automatically on re-index.
 
 ## Retrieval modes
 
@@ -104,11 +148,12 @@ A lightweight registry (`collections_registry.db`, lives next to `rag_manager.py
 
 ## Supported file types
 
-| Extension | Extraction method |
-|-----------|------------------|
-| `.pdf` | PyMuPDF (selectable text) |
-| `.docx` | python-docx |
-| `.txt`, `.md`, `.tex`, `.csv` | UTF-8 read |
+| Extension | Extraction method | Page numbers |
+|-----------|------------------|--------------|
+| `.pdf` | PyMuPDF, page-by-page | ✓ always available |
+| `.docx` | python-docx | — |
+| `.txt`, `.md`, `.tex`, `.csv` | UTF-8 read | — |
+| raw text via `add_text` | passed directly | — |
 
 For scanned PDFs with no selectable text, run OCR first (e.g. via doc-extractor or Mistral OCR) and use `add_text` with the output.
 
